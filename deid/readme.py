@@ -71,7 +71,8 @@ def main():
     st = [json.loads(l) for l in open(state / "status.jsonl", encoding="utf-8")]
     last = {d["rel"]: d for d in st}
     counts = collections.Counter(d["status"] for d in last.values())
-    empty = [d for d in last.values() if os.path.exists(d["dst"]) and os.path.getsize(d["dst"]) == 0]
+    empty = [d for d in last.values() if d.get("size") == 0 or
+             (d.get("size") is None and os.path.exists(d["dst"]) and os.path.getsize(d["dst"]) == 0)]
     fb = [d for d in last.values() if d["status"] == "fallback"]
     exc = LIMITS + f"\n  - {len(empty)} input files are empty (0 bytes); kept as empty files:\n"
     exc += "\n".join("      " + os.path.relpath(d["dst"], out) for d in empty[:100])

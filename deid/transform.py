@@ -142,8 +142,9 @@ def _run_group(task):
         else:
             link_or_copy(src, dst)
     dt = round(time.time() - t0, 2)
+    size = os.path.getsize(src)
     return [{"rel": rel, "dst": dst, "status": status, "handler": handler, "reason": reason,
-             "member_fallbacks": len(log), "secs": dt} for rel, dst in dsts]
+             "member_fallbacks": len(log), "secs": dt, "size": size} for rel, dst in dsts]
 
 
 def main():
@@ -156,6 +157,7 @@ def main():
     ap.add_argument("--workers", type=int, default=os.cpu_count())
     ap.add_argument("--prefix", default="")
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--rels-file", default=None, help="only these manifest paths (one per line)")
     a = ap.parse_args()
 
     out = Path(a.out)
@@ -165,6 +167,9 @@ def main():
     R0 = Replacer.load(a.mapping)
 
     rows = [r for r in load_manifest(a.manifest) if r.rel.startswith(a.prefix)]
+    if a.rels_file:
+        wanted = set(open(a.rels_file, encoding="utf-8").read().splitlines())
+        rows = [r for r in rows if r.rel in wanted]
     found = list(present(rows, a.input))
     if a.limit:
         found = found[: a.limit]

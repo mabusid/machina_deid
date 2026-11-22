@@ -13,6 +13,14 @@ Scores live in SCORES.md; link the attempt number here when a decision is tested
 - **Result:** attempt #N, score X → Y, or "reverted"
 -->
 
+## Slice runner because the volume is capped at 100 GB
+- **Context:** Storage limit increase denied; 140 GB input (126 GB unique) cannot fit
+- **Options:** A) Wait for a limit increase. B) `deid.batch`: ~12 GB slices of whole repos; download → harvest/transform → upload → evict, earliest slices kept resident
+- **Chose:** B
+- **Pros:** Fits any disk; resumable; same handlers and mapping as the single-pass run
+- **Cons / risks:** Each pass re-downloads what was evicted; upload.py must tolerate partial local folders (to verify); token expiry prompts pause the run
+- **Result:** —
+
 ## Small droplet (2 vCPU / 2 GB) + volume, not a big VM
 - **Context:** Budget allows only Basic 2 vCPU / 2 GB / 60 GB in SFO2
 - **Options:** A) Stream batches through the 60 GB disk (re-download 140 GB per pass). B) Add a block-storage volume (billed hourly, ≈ $0.10/GB-month) and keep the pipeline as is
