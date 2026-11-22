@@ -145,7 +145,12 @@ def main():
             B.add(low, pseudo)
     added = {k: v for k, v in B.keys.items() if k not in before}
     # a single new token that is a dictionary word never becomes a key
-    added = {k: v for k, v in added.items() if " " in k or "." in k or "@" in k or not is_common(k)}
+    # Bare 3-5 letter tokens from this pass are foreign function words and abbreviations
+    # ("eine", "glas", "gelb"). Phrases, emails and initials stay; longer bare surnames stay.
+    bare_drop = {"alumini", "russia", "kazan", "projekt", "locher", "xapa", "techos", "relleno",
+                 "glas", "gelb", "bild", "stahl", "blech"}
+    added = {k: v for k, v in added.items()
+             if any(c in k for c in " .,_@-") or (len(k) >= 6 and k not in bare_drop and not is_common(k))}
     changed = [k for k in before if B.keys.get(k, before[k]) != before[k]]
     if changed:
         raise SystemExit(f"refusing to change {len(changed)} existing keys, e.g. {changed[:5]}")
