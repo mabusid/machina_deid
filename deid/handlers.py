@@ -372,16 +372,56 @@ def h_pdf(data, name, R, depth, log):
                     obj.write(nb)
                     changed[0] = True
     walk(pdf.trailer)
-    if not changed[0]:
+    new = None
+    if changed[0]:
+        out = io.BytesIO()
+        pdf.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.preserve,
+                 deterministic_id=True)
+        new = out.getvalue()
+    paged = _pdf_page_text(new if new is not None else data, R)
+    if paged is not None:
+        new = paged
+    if new is None:
         return None
-    out = io.BytesIO()
-    pdf.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.preserve,
-             deterministic_id=True)
-    new = out.getvalue()
     with pikepdf.open(io.BytesIO(new)) as chk:
         if len(chk.pages) != npages:
             raise Unsafe("page count changed")
     return new
+
+
+def _pdf_page_text(data, R):
+    """Visible page text: redact each identifier and write its pseudonym in the same box."""
+    import pymupdf
+    from .pseudo import apply_case
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    if doc.needs_pass:
+        return None
+    changed = False
+    for page in doc:
+        b = page.get_text().encode("utf-8", "surrogateescape")
+        hs = R.hits(b)
+        if not hs:
+            continue
+        reps = {}
+        for s, e, p in hs:
+            try:
+                reps[b[s:e].decode("utf-8")] = apply_case(b[s:e], p).decode("ascii")
+            except (UnicodeDecodeError, UnicodeEncodeError):
+                continue
+        n = 0
+        for orig, rep in sorted(reps.items(), key=lambda t: -len(t[0])):
+            for r in page.search_for(orig):
+                fs = max(2.0, min(r.height * 0.8, r.width / max(1, len(rep)) / 0.5))
+                page.add_redact_annot(r, text=rep, fontname="helv", fontsize=fs, fill=False,
+                                      cross_out=False)
+                n += 1
+        if n:
+            page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                                  graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
+            changed = True
+    if not changed:
+        return None
+    return doc.tobytes(garbage=1, deflate=True)
 
 
 # ---------------------------------------------------------------- archives
