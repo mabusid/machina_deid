@@ -41,9 +41,9 @@ oper conc como cosm liste bitstream tegu alibre ezdxf easyeda matplotlib breadbo
 ethernet freecadweb extru silkscreen boolean cthread pico utils noname phys december deps
 mech cadf cadc pcbnew centre gripper engr soic chan params namespace robo broadcom todo
 thorlabs misumi adafruit lulzbot reprap wuerth festo igus bourns cadenas raspberrypi
-wiring coincidente volution v.\ mat.-extru. etude chanfrein ancrage productname trimesh
+wiring coincidente volution etude chanfrein ancrage productname trimesh
 sparkfun prusa farnell nodemcu mendel huxley combiner ncidente coaxiale edgebend darwin
-grblhal webui verisign usuario hwdev physcomp""".replace("\\ ", " ").split()) | {"cbore for", "vue de mise", "cosmetic thread", "corps volumiques",
+grblhal webui verisign usuario hwdev physcomp""".split()) | {"cbore for", "vue de mise", "cosmetic thread", "corps volumiques",
                       "simple hole", "textcreation time", "an author", "tap drill for",
                       "raspberry pi", "solid bodies", "detail folder", "century gothic",
                       "v. mat.-extru.", "dossier de", "classeur de conception",
