@@ -115,7 +115,7 @@ def main():
     m = json.load(open(mp, encoding="utf-8"))
     keys = m["keys"]
     secret = bytes.fromhex(open(C.PRIVATE / "secret.key").read().strip())
-    P = Pseudonymizer(secret, reserved={t for v in cnt for t in tokens(v.lower()) if is_word(t)})
+    P = Pseudonymizer(secret, reserved={t for v in list(cnt) + list(keys) for t in tokens(v.lower()) if is_word(t)})
     for k, v in keys.items():
         for tk, tv in zip(tokens(k), tokens(v)):
             if is_word(tk) and tk != tv and tk not in P.map:
@@ -126,16 +126,18 @@ def main():
         low = name.lower()
         variants = {low}
         toks = [t for t in tokens(low) if is_word(t)]
-        if len(toks) == 2 and len(toks[0]) > 1:
-            variants |= {f"{toks[0][0]}. {toks[1]}", f"{toks[0][0]}.{toks[1]}", toks[1]}
-        if len(toks) == 2 and len(toks[0]) == 1:
-            variants |= {f"{toks[0]}.{toks[1]}", f"{toks[0]}. {toks[1]}", toks[1]}
-        for var in variants:
+        if len(toks) == 2:
+            variants |= {f"{toks[0][0]}. {toks[1]}", f"{toks[0][0]}.{toks[1]}"}
+            if len(toks[1]) >= 5:
+                variants.add(toks[1])
+        for var in sorted(variants, key=len, reverse=True):
             if var in keys or var in added or len(var) < 4:
                 continue
-            if " " not in var and "." not in var and (is_common(var) or len(var) < 4):
+            if " " not in var and "." not in var and (is_common(var) or len(var) < 5):
                 continue
-            p = P.phrase(var, lambda t: len(t) > 1)
+            words = [t for t in tokens(var) if is_word(t)]
+            p = P.phrase(var, lambda t: len(t) > 1,
+                         lambda i, t: "last" if t == words[-1] else "first")
             if len(p) == len(var) and p != var:
                 added[var] = p
     keys.update(added)
