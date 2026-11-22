@@ -2,6 +2,7 @@
 # One-time droplet setup (Ubuntu 24.04, run as root inside tmux).
 # Usage: bash scripts/bootstrap_droplet.sh
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 DATA=/data
 [[ -e $DATA ]] || ln -s /mnt/volume_* $DATA
 
