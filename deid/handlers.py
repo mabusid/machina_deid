@@ -443,9 +443,13 @@ def _pdf_page_text(data, R):
                 continue
         writes = []
         for orig, rep in sorted(reps.items(), key=lambda t: -len(t[0])):
+            whole = re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![A-Za-z0-9])", re.I)
             for r in page.search_for(orig):
-                # a thin box through the middle of the line: neighbours above/below survive
                 h, w = r.height, r.width / max(1, len(orig))
+                ctx = page.get_textbox(pymupdf.Rect(r.x0 - 1.5 * w, r.y0 + 0.3 * h, r.x1 + 1.5 * w, r.y1 - 0.3 * h))
+                if not whole.search(ctx):
+                    continue  # match inside a longer word
+                # a thin box through the middle of the line: neighbours above/below survive
                 core = pymupdf.Rect(r.x0 + 0.15 * w, r.y0 + 0.35 * h, r.x1 - 0.15 * w, r.y1 - 0.35 * h)
                 page.add_redact_annot(core, fill=False, cross_out=False)
                 fs = max(2.0, min(h * 0.75, r.width / max(1, len(rep)) / 0.52))
