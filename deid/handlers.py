@@ -651,7 +651,10 @@ def _pdf_page_text(data, R):
     if doc.needs_pass:
         return None
     changed = False
-    for page in doc:
+    pages = list(doc)
+    if len(pages) > 60:
+        pages = pages[:15] + pages[-5:]
+    for page in pages:
         text = page.get_text()
         if not text:
             continue
