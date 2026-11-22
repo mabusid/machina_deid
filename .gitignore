@@ -8,6 +8,10 @@ tmp/
 *.sqlite
 mapping*
 *.sparseimage
+private/
+sample-manifest.tsv
+*.deid-tmp
+*.part
 
 # Python
 __pycache__/
