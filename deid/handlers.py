@@ -446,8 +446,8 @@ def _pdf_page_text(data, R):
             whole = re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![A-Za-z0-9])", re.I)
             for r in page.search_for(orig):
                 h, w = r.height, r.width / max(1, len(orig))
-                ctx = page.get_textbox(pymupdf.Rect(r.x0 - 1.5 * w, r.y0 + 0.3 * h, r.x1 + 1.5 * w, r.y1 - 0.3 * h))
-                if not whole.search(ctx):
+                ctx = page.get_textbox(pymupdf.Rect(r.x0 - 1.5 * w, r.y0 - 0.1 * h, r.x1 + 1.5 * w, r.y1 + 0.1 * h))
+                if not whole.search(ctx.replace("\n", " ")):
                     continue  # match inside a longer word
                 # a thin box through the middle of the line: neighbours above/below survive
                 core = pymupdf.Rect(r.x0 + 0.15 * w, r.y0 + 0.35 * h, r.x1 - 0.15 * w, r.y1 - 0.35 * h)
