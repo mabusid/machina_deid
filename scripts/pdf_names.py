@@ -34,7 +34,12 @@ Unless Otherwise Specified Dimensions Third First Angle Projection Signature App
 Fecha Escala Plano Datum Gezeichnet Erstellt Kontrolliert Norm Masstab Blatt Werkstoff Gewicht
 Benennung Zeichnungsnummer Dibujado Revisado Aprobado Dessine Verifie Approuve Echelle Format
 Solid Edge Works Inventor Autodesk Academic Copy Student Version Kg Mm Inch Iso Din Ansi
-Third Angle The For And With From Only All Rights Reserved Company Inc Ltd Gmbh""".split()}
+Third Angle The For And With From Only All Rights Reserved Company Inc Ltd Gmbh Sie Und Von
+Der Die Das Ein Eine Zur Zum Mit Bei Technische Referenz British Cern Ohl Sub-Assembly Assembly
+Impeller Ostschweizer Ost Croft Moule Verrine Darachbeg Iniciaomo Cienttfica""".split()}
+DROP = set()
+if os.path.exists(C.PRIVATE / "pdf_names_drop.txt"):
+    DROP = {l.strip().lower() for l in open(C.PRIVATE / "pdf_names_drop.txt", encoding="utf-8") if l.strip()}
 FIRSTS = {f.lower() for f in FIRST}
 
 
@@ -58,6 +63,8 @@ def candidates(text):
             if len(s) > 60 or not s.isascii():
                 continue
             for a, b in NAME2.findall(s):
+                if a.isupper() and b.isupper() and a.lower() not in FIRSTS:
+                    continue
                 if ok_first(a) and ok_last(b):
                     out.add(f"{a} {b}")
             for a, b in INIT.findall(s):
@@ -95,8 +102,12 @@ def main():
     with Pool(a.workers) as pool:
         for s in pool.imap_unordered(_work, paths, chunksize=16):
             cnt.update(s)
+    for d in [k for k in cnt if k.lower() in DROP]:
+        del cnt[d]
     print(f"{len(paths)} PDFs, {len(cnt)} candidate names")
-    print(cnt.most_common(60))
+    with open(C.PRIVATE / "pdf_names.tsv", "w", encoding="utf-8") as f:
+        for k, n in cnt.most_common():
+            f.write(f"{n}\t{k}\n")
     if a.dry:
         return
 
