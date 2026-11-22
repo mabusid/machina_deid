@@ -25,7 +25,11 @@ sourcerobotics stiima binaryblackhole mechpc locilamp""".split())
 
 BOILER = re.compile(r"rights reserved|licen[cs]e|corporation|incorporated|\binc\b|company|"
                     r"systems|notices|oracle|ljava|all users|authori[sz]|tools|cascade|"
-                    r"datavision|supply|partsolutions|stepup|\bmcad\b|header")
+                    r"datavision|supply|partsolutions|stepup|\bmcad\b|header|holders?\b|"
+                    r"liable|the authors|notice and|\bgmbh\b|foundation|division|windows user|"
+                    r"copier user")
+# label_person values (text after "Drawn by" etc.) must look like "First [M.] Last"
+LABEL_NAME = re.compile(r"[A-Z][a-z'\-]+(?: [A-Z]\.?)?(?: [A-Z][a-z'\-]+){1,2}")
 
 MANUAL = set("""glovebox esquisse croquis direccional carpeta autor punto redondeo
 cortar-extruir saliente-extruir extruir chafl chapa cbore aleph boss.-extru. cnccmv thor
@@ -37,9 +41,14 @@ oper conc como cosm liste bitstream tegu alibre ezdxf easyeda matplotlib breadbo
 ethernet freecadweb extru silkscreen boolean cthread pico utils noname phys december deps
 mech cadf cadc pcbnew centre gripper engr soic chan params namespace robo broadcom todo
 thorlabs misumi adafruit lulzbot reprap wuerth festo igus bourns cadenas raspberrypi
-wiring""".split()) | {"cbore for", "vue de mise", "cosmetic thread", "corps volumiques",
+wiring coincidente volution v.\ mat.-extru. etude chanfrein ancrage productname trimesh
+sparkfun prusa farnell nodemcu mendel huxley combiner ncidente coaxiale edgebend darwin
+grblhal webui verisign usuario hwdev physcomp""".replace("\\ ", " ").split()) | {"cbore for", "vue de mise", "cosmetic thread", "corps volumiques",
                       "simple hole", "textcreation time", "an author", "tap drill for",
-                      "raspberry pi", "solid bodies", "detail folder", "century gothic"}
+                      "raspberry pi", "solid bodies", "detail folder", "century gothic",
+                      "v. mat.-extru.", "dossier de", "classeur de conception",
+                      "ancrage de la", "chapa met", "rosca cosm", "filetage de per",
+                      "open rail", "traceparts s.a.", "it division"}
 
 
 def letters(k):
@@ -75,13 +84,24 @@ def main():
             why[k] = "boilerplate"
         elif spread.get(k, 0) >= a.max_repos and not person_like(k):
             why[k] = f"spread {spread[k]}"
+    rv = C.PRIVATE / "review.tsv"
+    if rv.exists():
+        for line in open(rv, encoding="utf-8", errors="replace"):
+            f = line.rstrip("\n").split("\t")
+            if len(f) > 4 and f[0] == "label_person" and f[4] not in ("", "0"):
+                v = f[1].strip()
+                if not LABEL_NAME.fullmatch(v):
+                    why[v.lower()] = "label"
     old = C.PRIVATE / "exclude.txt"
     keep_lines = []
     if old.exists():
+        auto = False
         for l in open(old, encoding="utf-8"):
             if l.startswith("# auto"):
-                break
-            if l.strip():
+                auto = True
+            elif l.strip() and auto:
+                why.setdefault(l.strip(), "previous")
+            elif l.strip():
                 keep_lines.append(l.rstrip("\n"))
     with open(old, "w", encoding="utf-8") as f:
         for l in keep_lines:
