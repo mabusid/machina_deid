@@ -32,6 +32,16 @@ def _transition_ok(a: int, b: int) -> bool:
     return a in _LOWER and b in _UPPER  # camelCase
 
 
+def _in_step_string(d: bytes, s: int, e: int) -> bool:
+    ls = d.rfind(b"\n", 0, s) + 1
+    if d.count(b"'", ls, s) % 2 == 0:
+        return False
+    j = e
+    while j < len(d) and d[j] in b" \t":
+        j += 1
+    return not (j < len(d) and d[j] == 0x28)  # '(' follows an entity keyword
+
+
 class Replacer:
     def __init__(self, keys: dict[str, str]):
         self.keys = keys
@@ -98,10 +108,24 @@ class Replacer:
         nb = self.replace_bytes(b)
         return s if nb is b else nb.decode("utf-8", "surrogateescape")
 
-    def replace_text(self, data: bytes) -> bytes:
-        """Whole-file text replacement; base64 payloads (embedded images) are left alone."""
+    def replace_text(self, data: bytes, step: bool | None = None) -> bytes:
+        """Whole-file text replacement; base64 payloads (embedded images) are left alone.
+
+        STEP (ISO 10303-21): names only live inside '...' strings; entity keywords and enums
+        outside them are format data, so only in-string hits are applied.
+        """
+        if step is None:
+            step = data.lstrip()[:13] == b"ISO-10303-21;"
         protect = [m.span() for m in BASE64_SPAN.finditer(data)] if b"base64," in data else ()
-        return self.replace_bytes(data, protect)
+        if not step:
+            return self.replace_bytes(data, protect)
+        hs = [h for h in self.hits(data, protect) if _in_step_string(data, h[0], h[1])]
+        if not hs:
+            return data
+        buf = bytearray(data)
+        for s, e, p in hs:
+            buf[s:e] = apply_case(data[s:e], p)
+        return bytes(buf)
 
     def replace_binary(self, data: bytes) -> bytes:
         """Edit only texty printable runs (ASCII and UTF-16LE) inside binary data.

@@ -51,13 +51,16 @@ def link_or_copy(src, dst):
 def stream_text(src, tmp, chunk=32 << 20) -> bool:
     """Line-aligned chunked replacement for big text files (keys never span a newline)."""
     changed = False
+    step = None
     with open(src, "rb") as f, open(tmp, "wb") as o:
         carry = b""
         while True:
             block = f.read(chunk)
+            if step is None:
+                step = (carry + block).lstrip()[:13] == b"ISO-10303-21;"
             if not block:
                 if carry:
-                    out = R.replace_text(carry)
+                    out = R.replace_text(carry, step)
                     changed |= out is not carry
                     o.write(out)
                 break
@@ -67,7 +70,7 @@ def stream_text(src, tmp, chunk=32 << 20) -> bool:
                 carry = data
                 continue
             part, carry = data[: cut + 1], data[cut + 1:]
-            out = R.replace_text(part)
+            out = R.replace_text(part, step)
             changed |= out is not part
             o.write(out)
     if os.path.getsize(tmp) != os.path.getsize(src):

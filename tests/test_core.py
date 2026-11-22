@@ -68,6 +68,15 @@ def test_step_text():
     assert b"CARTESIAN_POINT('',(1.,2.,3.))" in new
 
 
+def test_step_keywords_untouched():
+    R = Replacer({"pcurve": "qdurwe", "smith": "jones"})
+    step = (b"ISO-10303-21;\nDATA;\n#5=PCURVE('Smith pcurve',#6,#7);\n#8=PCURVE ('',#6,#7);\n"
+            b"#9=PRODUCT('smith','pcurve(1)',$);\nENDSEC;\n")
+    new = R.replace_text(step)
+    assert new.count(b"=PCURVE(") == 1 and b"#8=PCURVE (" in new
+    assert b"'Jones qdurwe'" in new and b"'jones'" in new and b"'pcurve(1)'" in new
+
+
 def test_binary_stl_header_only():
     _, R = build()
     hdr = b"solid made by jsmith at Zorblax Robotics".ljust(80, b" ")
