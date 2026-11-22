@@ -113,8 +113,13 @@ CURATED_ORGS = [
     "S. Aston", "M. Mooney", "Mooney, Alejandro", "A. Vecchio",
     "L. Spruyt", "L. Amann", "M. Timmers", "T. Westbury",
     "Fabian Hochecker", "U. Rapp", "J. Odell", "M. Meyer", "C. Torrie",
-    "C. Robertson", "E. Sanchez", "C. Echols", "P. Fritschel", "D. Coyne",
+    "C. Robertson", "E. Sanchez", "E.SANCHEZ", "C. Echols", "P. Fritschel", "D. Coyne",
     "B. Moore", "J. Sperling", "L. Renaglia",
+    "Howard Hughes Medical Institute", "Hughes Medical Institute", "HHMI", "Janelia",
+    "Senthur Raj Ayyappan", "Senthur Raj", "Ayyappan", "Thorlabs",
+    "Windward Spindle Technology", "G1MRA", "Telerobot", "Becchi",
+    "Conrad Electronic", "Open Source Ecology", "Istituto Italiano di Tecnologia",
+    "UNAM-FES-CUAUTITLAN", "flickingerd",
 ]
 
 CURATED_UNICODE = [
@@ -122,6 +127,7 @@ CURATED_UNICODE = [
     "Jesús", "Andrés", "Velázquez", "Víctor", "Séba", "séba", "SÉBA",
     "Marianne Röchling", "Malte Schöps", "Raphaël Bahisson", "Raphael Brandão",
     "Josef Průša", "Fam. Martínez Paéz", "The Mâââvin", "Rémi",
+    "UNAM-FES-CUAUTITLÁN",
     "Сергей", "东莞市万绵电子有限公司", "萝博派对", "苏朗", "冠禎 林",
     "黄海生", "迈迪01", "王术江", "山本英貴", "高越阳", "王静", "王 磊",
     "微软用户", "前春 周", "水谷 武司",

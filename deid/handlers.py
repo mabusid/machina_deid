@@ -118,18 +118,22 @@ def h_ole(data, name, R, depth, log):
         if nb is not raw:
             ole.write_stream(path, nb)
             changed = True
-    # Pass 2: all other streams — global ole_all + per-file saved-account sweep (skip Preview streams)
+    # Pass 2: all other streams — global ole_all + per-file saved-account sweep + SolidWorks __ZLB
     for path in other_paths:
         raw = ole.openstream(path).read()
         pname = "/".join(path)
-        if "preview" in pname.lower():
+        # Never touch embedded raster/metafile preview images (keeps OLE preview consistency 25/25)
+        if path[-1].lower() in ("preview", "previewpng", "thumbnail") or raw[:4] in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"\xd7\xcd\xc6\x9a") or raw[:2] == b"BM":
             expected[pname] = raw
             continue
-        nb = Ra.replace_binary(raw)
-        if local_pairs:
-            nb2 = _sweep_ole_stream(nb, local_pairs, Rp)
-            if nb2 is not nb:
-                nb = nb2
+        if path[-1].endswith("__ZLB"):
+            nb = _zlb_stream(raw, Ra, Rp, local_pairs)
+        else:
+            nb = Ra.replace_binary(raw)
+            if local_pairs:
+                nb2 = _sweep_ole_stream(nb, local_pairs, Rp)
+                if nb2 is not nb:
+                    nb = nb2
         expected[pname] = nb
         if nb is not raw:
             ole.write_stream(path, nb)
@@ -157,6 +161,46 @@ def h_ole(data, name, R, depth, log):
     return new
 
 
+def _zlb_stream(raw, Ra, Rp, local_pairs):
+    """Clean SolidWorks *__ZLB streams in-place: 16B GUID + uint32 ulen + uint32 clen + zlib + 0-pad.
+
+    SolidWorks uses zlib level 1; recompressing at level 9 fits within the original buffer
+    so OLE stream size and FAT stay untouched. Verifies exact decompression before returning.
+    """
+    if len(raw) < 32 or raw[24:25] != b"\x78":
+        return raw
+    ulen, clen = struct.unpack_from("<II", raw, 16)
+    if clen < 8 or 24 + clen > len(raw):
+        return raw
+    try:
+        dec = zlib.decompress(raw[24:24 + clen])
+    except Exception:
+        return raw
+    if len(dec) != ulen:
+        return raw
+    nb = Ra.replace_binary(dec)
+    if local_pairs:
+        nb2 = _sweep_ole_stream(nb, local_pairs, Rp)
+        if nb2 is not nb:
+            nb = nb2
+    if nb is dec or len(nb) != ulen:
+        return raw
+    # Recompress at level 9; must fit in original stream leaving at least 8 zero trailer bytes (or exact fit)
+    z9 = zlib.compress(nb, 9)
+    max_z = len(raw) - 24
+    if len(z9) > max_z:
+        return raw
+    out = raw[:20] + struct.pack("<I", len(z9)) + z9 + bytes(max_z - len(z9))
+    if len(out) != len(raw):
+        return raw
+    try:
+        if zlib.decompress(out[24:24 + len(z9)]) != nb:
+            return raw
+    except Exception:
+        return raw
+    return out
+
+
 def _sweep_ole_stream(raw, local_pairs, R):
     """Replace this file's own saved-account/author values across its non-property streams."""
     from .pseudo import apply_case
@@ -164,7 +208,7 @@ def _sweep_ole_stream(raw, local_pairs, R):
     for ob, pb in sorted(local_pairs.items(), key=lambda t: -len(t[0])):
         if len(ob) < 3 or len(ob) != len(pb):
             continue
-        # ASCII / UTF-8 exact byte-length occurrences (word-bounded when ASCII)
+        # ASCII / UTF-8 exact byte-length occurrences (word-bounded when ASCII, except len>=5 in MC=/path)
         cur = bytes(buf) if buf is not None else raw
         ob_low = ob.lower()
         if ob_low in cur.lower():
@@ -172,7 +216,10 @@ def _sweep_ole_stream(raw, local_pairs, R):
             for m in pat.finditer(cur):
                 s, e = m.start(), m.end()
                 if ob.isascii() and not R._boundary(cur, s, e):
-                    continue
+                    # Allow glued machine-name prefix like MC=ENGRNASIR; when len(ob) >= 5 and followed by boundary
+                    after_ok = e >= len(cur) or not (cur[e] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+                    if not (len(ob) >= 5 and after_ok):
+                        continue
                 rep = apply_case(cur[s:e], pb.decode("ascii")) if (ob.isascii() and pb.isascii()) else pb
                 if len(rep) == e - s:
                     buf = buf or bytearray(raw)
@@ -182,15 +229,19 @@ def _sweep_ole_stream(raw, local_pairs, R):
             u_ob = ob.decode("ascii").encode("utf-16-le")
             u_pb = pb.decode("ascii").encode("utf-16-le")
         else:
-            try:
-                s_ob = ob.decode("utf-8")
-                s_pb = pb.decode("ascii")
-                if len(s_ob) != len(s_pb):
+            s_ob = None
+            for enc_u in ("utf-8", "latin-1"):
+                try:
+                    s_ob = ob.decode(enc_u)
+                    break
+                except UnicodeDecodeError:
                     continue
-                u_ob = s_ob.encode("utf-16-le")
-                u_pb = s_pb.encode("utf-16-le")
-            except Exception:
+            if not s_ob or not pb.isascii():
                 continue
+            s_pb = pb.decode("ascii")
+            s_pb = s_pb[:len(s_ob)] if len(s_pb) >= len(s_ob) else s_pb + "x" * (len(s_ob) - len(s_pb))
+            u_ob = s_ob.encode("utf-16-le")
+            u_pb = s_pb.encode("utf-16-le")
         cur = bytes(buf) if buf is not None else raw
         if u_ob.lower() in cur.lower():
             pat = re.compile(re.escape(u_ob), re.I)
@@ -198,10 +249,10 @@ def _sweep_ole_stream(raw, local_pairs, R):
                 s, e = m.start(), m.end()
                 if e - s == len(u_pb):
                     if ob.isascii():
-                        # check UTF-16LE word boundaries
-                        if s >= 2 and cur[s - 1] == 0 and cur[s - 2] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789":
-                            continue
-                        if e + 2 <= len(cur) and cur[e + 1] == 0 and cur[e] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789":
+                        # check UTF-16LE word boundaries (allow glued suffix when len>=5)
+                        after_bad = e + 2 <= len(cur) and cur[e + 1] == 0 and cur[e] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                        before_bad = s >= 2 and cur[s - 1] == 0 and cur[s - 2] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                        if after_bad or (before_bad and len(ob) < 5):
                             continue
                     rep_u = apply_case(cur[s:e:2], pb.decode("ascii")).decode("ascii").encode("utf-16-le") if (ob.isascii() and pb.isascii()) else u_pb
                     if len(rep_u) == e - s:
@@ -243,9 +294,23 @@ def _propset(raw, R, umap=None, local_pairs=None):
                     if len(rfit) == len(v):
                         buf[o + 4:o + 4 + 2 * len(v)] = rfit.encode("utf-16-le")
                         if local_pairs is not None and len(v) >= 3:
-                            vb = v.encode("utf-8", "ignore")
-                            if len(vb) == len(rfit):
-                                local_pairs[vb] = rfit.encode("ascii")
+                            for enc_u in ("utf-8", "latin-1"):
+                                try:
+                                    vb = v.encode(enc_u)
+                                except UnicodeEncodeError:
+                                    continue
+                                rfb = (rep[:len(vb)] if len(rep) >= len(vb) else rep + "x" * (len(vb) - len(rep))).encode("ascii")
+                                local_pairs[vb] = rfb
+                else:
+                    # Non-ASCII substring inside UTF-16LE path (e.g. C:\Users\séba\Desktop\...)
+                    nv = v
+                    for uk, urep in umap.items():
+                        if not urep.isascii() or len(uk) < 3 or uk not in nv.lower():
+                            continue
+                        rfit = urep[:len(uk)] if len(urep) >= len(uk) else urep + "x" * (len(uk) - len(urep))
+                        nv = re.sub(re.escape(uk), rfit, nv, flags=re.I)
+                    if nv != v and len(nv) == len(v):
+                        buf[o + 4:o + 4 + 2 * len(v)] = nv.encode("utf-16-le")
         else:
             v = s.split(b"\x00", 1)[0]
             if not v:
@@ -271,6 +336,25 @@ def _propset(raw, R, umap=None, local_pairs=None):
                         buf[o + 4:o + 4 + len(v)] = rfit
                         if local_pairs is not None and len(v) >= 3:
                             local_pairs[v] = rfit
+                else:
+                    # Handle non-ASCII account embedded inside a Windows path (e.g. C:\Users\séba\Desktop\...)
+                    cur_v = bytearray(v)
+                    changed_v = False
+                    for uk, urep in umap.items():
+                        if not urep.isascii() or len(uk) < 3:
+                            continue
+                        for enc_u in ("utf-8", "latin-1"):
+                            try:
+                                ukb = uk.encode(enc_u)
+                            except UnicodeEncodeError:
+                                continue
+                            if ukb in bytes(cur_v).lower():
+                                rfit = (urep[:len(ukb)] if len(urep) >= len(ukb) else urep + "x" * (len(ukb) - len(urep))).encode("ascii")
+                                for mm in re.finditer(re.escape(ukb), bytes(cur_v), re.I):
+                                    cur_v[mm.start():mm.end()] = rfit
+                                    changed_v = True
+                    if changed_v and len(cur_v) == len(v):
+                        buf[o + 4:o + 4 + len(v)] = bytes(cur_v)
     out = bytes(buf)
     return raw if out == raw else out
 
@@ -588,14 +672,17 @@ def _pdf_page_text(data, R):
                 continue
         writes = []
         claimed = []
+        missed = []
         for orig, rep in sorted(reps.items(), key=lambda t: -len(t[0])):
             is_asc = orig.isascii()
+            hit_any = False
             for q in page.search_for(orig, quads=True):
                 r = q.rect
                 if r.is_empty or r.width <= 0 or r.height <= 0:
                     continue
                 # Skip if already covered by a longer match
                 if any((r & c).get_area() > 0.5 * r.get_area() for c in claimed):
+                    hit_any = True
                     continue
                 dx, dy = q.ur.x - q.ul.x, q.ur.y - q.ul.y
                 horiz = abs(dx) >= abs(dy)
@@ -610,13 +697,9 @@ def _pdf_page_text(data, R):
                                              r.x1 + 0.1 * r.width, r.y1 + 1.5 * ch)
                     ctx = page.get_textbox(ctx_r).replace("\n", " ").encode("utf-8", "ignore")
                     ob = orig.encode("utf-8", "ignore")
-                    ok = False
-                    for m in re.finditer(re.escape(ob), ctx, re.I):
-                        if Rpt._boundary(ctx, m.start(), m.end()):
-                            ok = True
-                            break
-                    if not ok:
-                        continue  # match inside a longer non-boundary word
+                    matches = list(re.finditer(re.escape(ob), ctx, re.I))
+                    if not matches or not any(Rpt._boundary(ctx, m.start(), m.end()) for m in matches):
+                        continue  # match inside a longer non-boundary word or PyMuPDF ligature-offset bug
                 if horiz:
                     core = pymupdf.Rect(r.x0 + 0.01 * r.width, r.y0 + 0.15 * r.height,
                                         r.x1 - 0.01 * r.width, r.y1 - 0.15 * r.height)
@@ -632,6 +715,46 @@ def _pdf_page_text(data, R):
                 page.add_redact_annot(core, fill=False, cross_out=False)
                 writes.append((pt, rep, fs, ang))
                 claimed.append(r)
+                hit_any = True
+            if not hit_any:
+                missed.append(orig.lower())
+        # Span-level fallback ONLY for hits search_for missed (e.g. fi/fl/ff ligatures)
+        if missed:
+            for blk in page.get_text("dict").get("blocks", ()):
+                for ln in blk.get("lines", ()):
+                    ldx, ldy = ln.get("dir", (1.0, 0.0))
+                    lhoriz = abs(ldx) >= abs(ldy)
+                    for sp in ln.get("spans", ()):
+                        st = sp.get("text", "")
+                        if len(st) < 3:
+                            continue
+                        stl = st.lower()
+                        if not any(m in stl for m in missed):
+                            continue
+                        r = pymupdf.Rect(sp["bbox"])
+                        if r.is_empty or r.width <= 0 or r.height <= 0:
+                            continue
+                        if any((r & c).get_area() > 0.3 * min(r.get_area(), c.get_area()) for c in claimed):
+                            continue
+                        st2 = R.replace_unicode_str(st)
+                        st3 = Rpt.replace_str(st2)
+                        if st3 == st:
+                            continue
+                        if lhoriz:
+                            core = pymupdf.Rect(r.x0 + 0.01 * r.width, r.y0 + 0.15 * r.height,
+                                                r.x1 - 0.01 * r.width, r.y1 - 0.15 * r.height)
+                            fs = max(2.0, min(r.height * 0.72, r.width / max(1, len(st3)) / 0.54))
+                            ang = 0 if ldx >= 0 else 180
+                            pt = pymupdf.Point(r.x0, r.y1 - 0.22 * r.height) if ang == 0 else pymupdf.Point(r.x1, r.y0 + 0.22 * r.height)
+                        else:
+                            core = pymupdf.Rect(r.x0 + 0.15 * r.width, r.y0 + 0.01 * r.height,
+                                                r.x1 - 0.15 * r.width, r.y1 - 0.01 * r.height)
+                            fs = max(2.0, min(r.width * 0.72, r.height / max(1, len(st3)) / 0.54))
+                            ang = 90 if ldy < 0 else 270
+                            pt = pymupdf.Point(r.x1 - 0.22 * r.width, r.y1) if ang == 90 else pymupdf.Point(r.x0 + 0.22 * r.width, r.y0)
+                        page.add_redact_annot(core, fill=False, cross_out=False)
+                        writes.append((pt, st3, fs, ang))
+                        claimed.append(r)
         if writes:
             page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
                                   graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
