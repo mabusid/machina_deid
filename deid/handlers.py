@@ -375,7 +375,8 @@ def h_pdf(data, name, R, depth, log):
     if not changed[0]:
         return None
     out = io.BytesIO()
-    pdf.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.preserve)
+    pdf.save(out, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.preserve,
+             deterministic_id=True)
     new = out.getvalue()
     with pikepdf.open(io.BytesIO(new)) as chk:
         if len(chk.pages) != npages:

@@ -7,10 +7,10 @@ State (real paths, private) goes to PRIVATE/state/<attempt>/.
 import argparse
 import collections
 import json
-import mmap
 import os
 import shutil
 import signal
+import struct
 import time
 from multiprocessing import Pool
 from pathlib import Path
@@ -21,7 +21,7 @@ from .manifest import load_manifest, present
 from .matcher import Replacer
 from .paths import rename_rel, split_ext
 
-BIG = 256 << 20
+BIG = int(os.environ.get("DEID_BIG_MB", "150")) << 20  # above this: chunked text path, 1 worker
 R = None
 
 
@@ -48,61 +48,94 @@ def link_or_copy(src, dst):
         shutil.copy2(src, dst)
 
 
-def _stream_big(src, rel0, tmp):
-    """Large text / STL files: patch a copy in place, never holding the file in memory."""
+def stream_text(src, tmp, chunk=32 << 20) -> bool:
+    """Line-aligned chunked replacement for big text files (keys never span a newline)."""
+    changed = False
+    with open(src, "rb") as f, open(tmp, "wb") as o:
+        carry = b""
+        while True:
+            block = f.read(chunk)
+            if not block:
+                if carry:
+                    out = R.replace_text(carry)
+                    changed |= out is not carry
+                    o.write(out)
+                break
+            data = carry + block
+            cut = data.rfind(b"\n")
+            if cut < 0:
+                carry = data
+                continue
+            part, carry = data[: cut + 1], data[cut + 1:]
+            out = R.replace_text(part)
+            changed |= out is not part
+            o.write(out)
+    if os.path.getsize(tmp) != os.path.getsize(src):
+        raise RuntimeError("stream length changed")
+    return changed
+
+
+def _transform_big(src, rel0, tmp):
+    """Low-memory path. Returns (handler, wrote_tmp) or None to use the in-memory path."""
     with open(src, "rb") as f:
         head = f.read(1024)
     kind = classify(rel0, head)
-    if kind not in ("text", "stl"):
-        return None, kind
-    with open(src, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-        if kind == "stl" and len(mm) >= 84 and 84 + 50 * int.from_bytes(mm[80:84], "little") == len(mm):
-            hdr = R.replace_bytes(mm[:80])
-            patches = [] if hdr == mm[:80] else [(0, hdr)]
-        else:
-            patches = list(R.patches_stream(mm))
-    if not patches:
-        return False, kind
-    shutil.copyfile(src, tmp)
-    with open(tmp, "r+b") as out:
-        for off, b in patches:
-            out.seek(off)
-            out.write(b)
-    if os.path.getsize(tmp) != os.path.getsize(src):
-        raise ValueError("length changed")
-    return True, kind
+    size = os.path.getsize(src)
+    if kind == "stl":
+        with open(src, "rb") as f:
+            hdr = f.read(84)
+        if len(hdr) == 84 and 84 + 50 * struct.unpack_from("<I", hdr, 80)[0] == size:
+            new_hdr = R.replace_bytes(hdr[:80])
+            if new_hdr == hdr[:80]:
+                return kind, False
+            shutil.copyfile(src, tmp)
+            with open(tmp, "r+b") as o:
+                o.write(new_hdr)
+            return kind, True
+        kind = "text"
+    if kind == "text":
+        return kind, stream_text(src, tmp)
+    return None
 
 
 def _run_group(task):
     src, rel0, dsts = task
     t0 = time.time()
     log, handler, reason, new = [], "", "", None
+    tmp0 = dsts[0][1] + ".deid-tmp"
+    os.makedirs(os.path.dirname(tmp0), exist_ok=True)
+    big_done = False
     try:
         signal.alarm(C.FILE_TIMEOUT_S)
         if os.path.getsize(src) >= BIG:
-            tmp = dsts[0][1] + ".deid-tmp"
-            os.makedirs(os.path.dirname(tmp), exist_ok=True)
-            streamed, handler = _stream_big(src, rel0, tmp)
-            if streamed is not None:
-                signal.alarm(0)
-                return _finish_streamed(src, tmp, dsts, streamed, handler, t0)
-        with open(src, "rb") as f:
-            data = f.read()
-        new, handler = process(data, rel0, R, 0, log)
-        status = "unchanged" if new is None else "changed"
+            res = _transform_big(src, rel0, tmp0)
+            if res is not None:
+                handler, wrote = res
+                big_done = True
+                status = "changed" if wrote else "unchanged"
+                if not wrote and os.path.exists(tmp0):
+                    os.unlink(tmp0)
+        if not big_done:
+            with open(src, "rb") as f:
+                data = f.read()
+            new, handler = process(data, rel0, R, 0, log)
+            del data
+            status = "unchanged" if new is None else "changed"
     except Exception as e:
         new, status, reason = None, "fallback", f"{type(e).__name__}: {e}"[:300]
+        if os.path.exists(tmp0):
+            os.unlink(tmp0)
     finally:
         signal.alarm(0)
     first = None
     for rel, dst in dsts:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if new is not None:
+        if status == "changed":
             if first is None:
-                tmp = dst + ".deid-tmp"
-                with open(tmp, "wb") as f:
-                    f.write(new)
-                os.replace(tmp, dst)
+                if new is not None:
+                    with open(tmp0, "wb") as f:
+                        f.write(new)
+                os.replace(tmp0, dst)
                 first = dst
             else:
                 link_or_copy(first, dst)
@@ -111,20 +144,6 @@ def _run_group(task):
     dt = round(time.time() - t0, 2)
     return [{"rel": rel, "dst": dst, "status": status, "handler": handler, "reason": reason,
              "member_fallbacks": len(log), "secs": dt} for rel, dst in dsts]
-
-
-def _finish_streamed(src, tmp, dsts, changed, handler, t0):
-    first = None
-    for rel, dst in dsts:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if changed and first is None:
-            os.replace(tmp, dst)
-            first = dst
-        else:
-            link_or_copy(first or src, dst)
-    status = "changed" if changed else "unchanged"
-    return [{"rel": rel, "dst": dst, "status": status, "handler": handler + "/stream", "reason": "",
-             "member_fallbacks": 0, "secs": round(time.time() - t0, 2)} for rel, dst in dsts]
 
 
 def main():

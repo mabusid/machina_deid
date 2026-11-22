@@ -13,6 +13,14 @@ Scores live in SCORES.md; link the attempt number here when a decision is tested
 - **Result:** attempt #N, score X → Y, or "reverted"
 -->
 
+## Small droplet (2 vCPU / 2 GB) + volume, not a big VM
+- **Context:** Budget allows only Basic 2 vCPU / 2 GB / 60 GB in SFO2
+- **Options:** A) Stream batches through the 60 GB disk (re-download 140 GB per pass). B) Add a block-storage volume (billed hourly, ≈ $0.10/GB-month) and keep the pipeline as is
+- **Chose:** B, with files ≥ 150 MB processed in line-aligned chunks (1 worker) and 8 GB swap on the volume
+- **Pros:** One download; chunked path verified byte-identical to the in-memory path on the sample
+- **Cons / risks:** A full transform takes hours on 2 cores, so fewer scored attempts; droplet can be resized temporarily for big runs
+- **Result:** —
+
 ## Binary files: only edit strings that cannot be random bytes
 - **Context:** Compressed CAD streams are random bytes; a 3–4 letter key matches there by chance. Estimated hundreds of corrupted files corpus-wide with naive string replacement
 - **Options:** A) Edit every printable run ≥ 8. B) ASCII runs ≥ 16 chars, or shorter only if NUL-terminated, keys ≥ 4 letters; UTF-16LE runs always (alternating NULs never occur by chance)

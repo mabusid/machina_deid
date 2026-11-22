@@ -6,8 +6,9 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 DATA=/data
 [[ -e $DATA ]] || ln -s /mnt/volume_* $DATA
 
-if ! swapon --show | grep -q swapfile; then  # small droplets: avoid OOM on big archives
-  fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+# Small droplets (2 GB RAM): 8 GB swap on the volume so big archives don't get OOM-killed.
+if ! swapon --show | grep -q swapfile; then
+  fallocate -l 8G $DATA/swapfile && chmod 600 $DATA/swapfile && mkswap $DATA/swapfile && swapon $DATA/swapfile
 fi
 
 apt-get update

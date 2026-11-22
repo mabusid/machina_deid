@@ -117,20 +117,6 @@ def test_png_text_chunk():
     assert kind == "image" and b"Smith" not in new
 
 
-def test_stream_matches_whole_file():
-    _, R = build()
-    import random
-    rnd = random.Random(1)
-    words = [b"John Smith", b"jsmith", b"Zorblax-Robotics", b"#12=CARTESIAN_POINT('',(1.,2.,3.));", b"\n", b" "]
-    data = b"".join(rnd.choice(words) for _ in range(5000))
-    whole = R.replace_bytes(data)
-    for window in (97, 1000, 4096):
-        buf = bytearray(data)
-        for off, b in R.patches_stream(data, window=window):
-            buf[off:off + len(b)] = b
-        assert bytes(buf) == whole, window
-
-
 def test_pdf_metadata():
     import pikepdf
     _, R = build()
