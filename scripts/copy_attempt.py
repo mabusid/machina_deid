@@ -50,9 +50,18 @@ def list_keys(bucket, prefix, tok):
         if cont:
             q["continuation-token"] = cont
         t = tok.value
-        c.request("GET", f"/{bucket}/?{urllib.parse.urlencode(q)}", headers={"Authorization": f"Bearer {t}"})
-        r = c.getresponse()
-        b = r.read()
+        for attempt in range(6):
+            try:
+                c.request("GET", f"/{bucket}/?{urllib.parse.urlencode(q)}", headers={"Authorization": f"Bearer {t}"})
+                r = c.getresponse()
+                b = r.read()
+                break
+            except (OSError, http.client.HTTPException):
+                c.close()
+                time.sleep(0.5 * 2 ** attempt)
+                c = http.client.HTTPSConnection(HOST, timeout=60)
+        else:
+            raise RuntimeError("list: connection failed")
         if expired(r.status, b):
             tok.renew(t)
             continue
