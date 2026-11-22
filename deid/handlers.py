@@ -100,16 +100,18 @@ def h_ole(data, name, R, depth, log):
     import olefile
     fp = io.BytesIO(data)
     ole = olefile.OleFileIO(fp, write_mode=True)
+    Ra = getattr(R, "ole_all", R)
+    Rp = getattr(R, "ole_prop", Ra)
     changed = False
     expected = {}
     for path in ole.listdir(streams=True, storages=False):
         raw = ole.openstream(path).read()
-        nb = R.replace_binary(raw)
+        nb = _propset(raw, Rp) if path[-1].startswith("\x05") else Ra.replace_binary(raw)
         expected["/".join(path)] = nb
         if nb is not raw:
             ole.write_stream(path, nb)
             changed = True
-    stale = R.replace_binary(data) is not data  # identifiers left in free/slack sectors
+    stale = Ra.replace_binary(data) is not data  # identifiers left in free/slack sectors
     if not changed and not stale:
         return None
     buf = bytearray(fp.getvalue())
@@ -124,6 +126,37 @@ def h_ole(data, name, R, depth, log):
         if after.openstream(path).read() != want:
             raise Unsafe("OLE stream content mismatch")
     return new
+
+
+def _propset(raw, R):
+    """Property-set stream: every VT_LPSTR / VT_LPWSTR value, however short, plus long runs."""
+    buf = bytearray(R.replace_binary(raw))
+    for m in re.finditer(rb"[\x1e\x1f]\x00\x00\x00", raw):
+        o, wide = m.end(), raw[m.start()] == 0x1F
+        if o + 4 > len(raw):
+            continue
+        n = int.from_bytes(raw[o:o + 4], "little") * (2 if wide else 1)
+        if not 1 <= n <= 1024 or o + 4 + n > len(raw):
+            continue
+        s = raw[o + 4:o + 4 + n]
+        if wide:
+            if len(s) % 2:
+                continue
+            v = s.decode("utf-16-le", "replace").split("\x00", 1)[0]
+            if not v or not all(0x20 <= ord(c) <= 0x7E for c in v):
+                continue
+            nv = R.replace_bytes(v.encode("ascii"))
+            if nv != v.encode("ascii"):
+                buf[o + 4:o + 4 + 2 * len(v)] = nv.decode("ascii").encode("utf-16-le")
+        else:
+            v = s.split(b"\x00", 1)[0]
+            if not v or any(c < 0x20 or c > 0x7E for c in v):
+                continue
+            nv = R.replace_bytes(v)
+            if nv is not v:
+                buf[o + 4:o + 4 + len(v)] = nv
+    out = bytes(buf)
+    return raw if out == raw else out
 
 
 def _ole_zero_unused(ole, buf):

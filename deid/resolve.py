@@ -42,6 +42,9 @@ ae sa qa kw om bh ir pk in bd lk np cn hk tw jp kr sg my th vn ph id nz za ng ke
 br ar cl pe uy py bo ec ve mx gt cr pa do pr cu jm tt eu asia tech online site xyz store
 cloud design studio works systems solutions engineering company email space global group
 """.split())
+GENERIC_ACCOUNTS = {"administrator", "admin", "user", "users", "operator", "owner", "guest",
+                    "portable", "default", "windows user", "copier user", "usuario", "utilisateur",
+                    "benutzer", "test", "student", "pc", "profs", "temp"}
 COPY_TAIL = re.compile(r"(?i)[.,;]?\s*(all rights reserved|licen[sc]ed|some rights|under\b|this\b).*$")
 
 
@@ -251,8 +254,27 @@ def main():
             getattr(B, b)(cv)
         review.append((k, v, n, b or "review-only", len(B.keys) - before, h["examples"].get(f"{k}\t{v}", "")))
 
+    # OLE saved accounts / authors: every value gets a pseudonym inside property sets (ole_prop),
+    # even generic or short ones; non-generic ones also in the file's other streams (ole_all).
+    ole_all, ole_prop = {}, {}
+    for (k, v), n in sorted(counts.items(), key=lambda t: (-t[1], t[0])):
+        if k not in ("ole_lastsavedby", "ole_author"):
+            continue
+        val = v.split("\x00")[0].strip()
+        lv = val.lower()
+        if not val or len(val) > 64 or not val.isascii() or not val.isprintable() \
+                or lv in B.keys or lv in ole_prop or not re.search(r"[a-z]", lv):
+            continue
+        p = P.phrase(val, lambda t: True)
+        if p == lv or len(p) != len(lv):
+            continue
+        ole_prop[lv] = p
+        if len(lv) >= 3 and lv not in GENERIC_ACCOUNTS and lv not in exclude and lv not in ALLOW:
+            ole_all[lv] = p
+
     with open(os.path.join(priv, "mapping.json"), "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "keys": B.keys, "owners": B.owners}, f, indent=0, sort_keys=True)
+        json.dump({"version": 1, "keys": B.keys, "owners": B.owners,
+                   "ole_all": ole_all, "ole_prop": ole_prop}, f, indent=0, sort_keys=True)
     with open(os.path.join(priv, "review.tsv"), "w", encoding="utf-8") as f:
         f.write("kind\tvalue\tcount\tpolicy\tkeys_added\texample\n")
         for r in sorted(review, key=lambda r: (r[3] == "review-only", -r[2])):

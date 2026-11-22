@@ -58,6 +58,9 @@ class Replacer:
         m = json.loads(open(mapping_path, encoding="utf-8").read())
         r = cls(m["keys"])
         r.owners = m.get("owners", {})
+        oa, op = m.get("ole_all", {}), m.get("ole_prop", {})
+        r.ole_all = cls({**m["keys"], **oa}) if oa else r
+        r.ole_prop = cls({**m["keys"], **oa, **op}) if op else r.ole_all
         return r
 
     def _boundary(self, d: bytes, s: int, e: int) -> bool:

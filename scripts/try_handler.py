@@ -22,6 +22,7 @@ def main():
     ap.add_argument("--n", type=int, default=40)
     a = ap.parse_args()
     R = Replacer.load(C.PRIVATE / "mapping.json")
+    S = R.ole_prop if a.ext not in (".pdf",) else R
     rows = [r for r in load_manifest(C.MANIFEST) if r.rel.lower().endswith(a.ext)
             and os.path.exists(os.path.join(C.INPUT, r.rel)) and r.size < 20 << 20]
     random.Random(1).shuffle(rows)
@@ -29,7 +30,7 @@ def main():
     t_all = 0.0
     for r in rows[: a.n]:
         data = open(os.path.join(C.INPUT, r.rel), "rb").read()
-        before = scan(data, r.rel, R)
+        before = scan(data, r.rel, S)
         t = time.time()
         try:
             new, kind = process(data, r.rel, R)
@@ -38,7 +39,7 @@ def main():
             continue
         dt = time.time() - t
         t_all += dt
-        after = scan(new if new is not None else data, r.rel, R)
+        after = scan(new if new is not None else data, r.rel, S)
         nb, na = sum(before.values()), sum(after.values())
         tot_b += nb
         tot_a += na
