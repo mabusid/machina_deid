@@ -7,6 +7,7 @@ State (real paths, private) goes to PRIVATE/state/<attempt>/.
 import argparse
 import collections
 import json
+import mmap
 import os
 import shutil
 import signal
@@ -15,7 +16,7 @@ from multiprocessing import Pool
 from pathlib import Path
 
 from . import config as C
-from .handlers import process
+from .handlers import classify, process
 from .manifest import load_manifest, present
 from .matcher import Replacer
 from .paths import rename_rel, split_ext
@@ -47,12 +48,44 @@ def link_or_copy(src, dst):
         shutil.copy2(src, dst)
 
 
+def _stream_big(src, rel0, tmp):
+    """Large text / STL files: patch a copy in place, never holding the file in memory."""
+    with open(src, "rb") as f:
+        head = f.read(1024)
+    kind = classify(rel0, head)
+    if kind not in ("text", "stl"):
+        return None, kind
+    with open(src, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+        if kind == "stl" and len(mm) >= 84 and 84 + 50 * int.from_bytes(mm[80:84], "little") == len(mm):
+            hdr = R.replace_bytes(mm[:80])
+            patches = [] if hdr == mm[:80] else [(0, hdr)]
+        else:
+            patches = list(R.patches_stream(mm))
+    if not patches:
+        return False, kind
+    shutil.copyfile(src, tmp)
+    with open(tmp, "r+b") as out:
+        for off, b in patches:
+            out.seek(off)
+            out.write(b)
+    if os.path.getsize(tmp) != os.path.getsize(src):
+        raise ValueError("length changed")
+    return True, kind
+
+
 def _run_group(task):
     src, rel0, dsts = task
     t0 = time.time()
     log, handler, reason, new = [], "", "", None
     try:
         signal.alarm(C.FILE_TIMEOUT_S)
+        if os.path.getsize(src) >= BIG:
+            tmp = dsts[0][1] + ".deid-tmp"
+            os.makedirs(os.path.dirname(tmp), exist_ok=True)
+            streamed, handler = _stream_big(src, rel0, tmp)
+            if streamed is not None:
+                signal.alarm(0)
+                return _finish_streamed(src, tmp, dsts, streamed, handler, t0)
         with open(src, "rb") as f:
             data = f.read()
         new, handler = process(data, rel0, R, 0, log)
@@ -78,6 +111,20 @@ def _run_group(task):
     dt = round(time.time() - t0, 2)
     return [{"rel": rel, "dst": dst, "status": status, "handler": handler, "reason": reason,
              "member_fallbacks": len(log), "secs": dt} for rel, dst in dsts]
+
+
+def _finish_streamed(src, tmp, dsts, changed, handler, t0):
+    first = None
+    for rel, dst in dsts:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        if changed and first is None:
+            os.replace(tmp, dst)
+            first = dst
+        else:
+            link_or_copy(first or src, dst)
+    status = "changed" if changed else "unchanged"
+    return [{"rel": rel, "dst": dst, "status": status, "handler": handler + "/stream", "reason": "",
+             "member_fallbacks": 0, "secs": round(time.time() - t0, 2)} for rel, dst in dsts]
 
 
 def main():

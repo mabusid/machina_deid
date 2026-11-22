@@ -6,6 +6,10 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 DATA=/data
 [[ -e $DATA ]] || ln -s /mnt/volume_* $DATA
 
+if ! swapon --show | grep -q swapfile; then  # small droplets: avoid OOM on big archives
+  fallocate -l 8G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+fi
+
 apt-get update
 apt-get install -y git tmux python3-venv python3-pip unzip p7zip-full aria2 curl \
   libimage-exiftool-perl poppler-utils wamerican

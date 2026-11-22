@@ -40,6 +40,7 @@ class Replacer:
             assert len(k) == len(v) and k.isascii() and v.isascii(), k
             self.A.add_word(k, (len(k), v))
         self.empty = not keys
+        self.maxlen = max((len(k) for k in keys), default=0)
         if keys:
             self.A.make_automaton()
 
@@ -92,6 +93,18 @@ class Replacer:
         for s, e, p in hs:
             buf[s:e] = apply_case(data[s:e], p)
         return bytes(buf)
+
+    def patches_stream(self, mm, window: int = 64 << 20):
+        """Yield (offset, new_bytes) for a large text buffer (e.g. mmap) without loading it whole."""
+        ctx = self.maxlen + 2
+        n = len(mm)
+        for a in range(0, n, window):
+            b = min(n, a + window)
+            lo, hi = max(0, a - ctx), min(n, b + ctx)
+            seg = mm[lo:hi]
+            for s, e, p in self.hits(seg):
+                if a <= lo + s < b:
+                    yield lo + s, apply_case(seg[s:e], p)
 
     def replace_str(self, s: str) -> str:
         b = s.encode("utf-8", "surrogateescape")
