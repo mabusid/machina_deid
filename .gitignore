@@ -1,0 +1,19 @@
+# Data — never commit (huge, and contains identifying info)
+input/
+output/
+corpus/
+work/
+tmp/
+*.db
+*.sqlite
+mapping*
+*.sparseimage
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store
