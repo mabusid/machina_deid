@@ -441,16 +441,21 @@ def _pdf_page_text(data, R):
                 reps[b[s:e].decode("utf-8")] = apply_case(b[s:e], p).decode("ascii")
             except (UnicodeDecodeError, UnicodeEncodeError):
                 continue
-        n = 0
+        writes = []
         for orig, rep in sorted(reps.items(), key=lambda t: -len(t[0])):
             for r in page.search_for(orig):
-                fs = max(2.0, min(r.height * 0.8, r.width / max(1, len(rep)) / 0.5))
-                page.add_redact_annot(r, text=rep, fontname="helv", fontsize=fs, fill=False,
-                                      cross_out=False)
-                n += 1
-        if n:
+                # a thin box through the middle of the line: neighbours above/below survive
+                h, w = r.height, r.width / max(1, len(orig))
+                core = pymupdf.Rect(r.x0 + 0.15 * w, r.y0 + 0.35 * h, r.x1 - 0.15 * w, r.y1 - 0.35 * h)
+                page.add_redact_annot(core, fill=False, cross_out=False)
+                fs = max(2.0, min(h * 0.75, r.width / max(1, len(rep)) / 0.52))
+                writes.append((pymupdf.Point(r.x0, r.y1 - 0.22 * h), rep, fs))
+        if writes:
             page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
                                   graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
+            for pt, rep, fs in writes:
+                page.insert_text(pt, rep, fontsize=fs, fontname="helv",
+                                 rotate=page.rotation and (360 - page.rotation) % 360)
             changed = True
     if not changed:
         return None
