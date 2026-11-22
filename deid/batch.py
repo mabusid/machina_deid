@@ -237,7 +237,7 @@ def cmd_transform(a):
     print(f"[transform] all {len(slices)} slices done in {time.time() - t0:.0f}s; README at {readme}")
     if a.upload_cmd:
         corpus.mkdir(parents=True, exist_ok=True)
-        subprocess.run(a.upload_cmd, shell=True, cwd=att, check=True)
+        subprocess.run(a.upload_cmd + " --readme README.txt", shell=True, cwd=att, check=True)
 
 
 def main():
