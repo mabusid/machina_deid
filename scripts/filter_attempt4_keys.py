@@ -4,8 +4,11 @@ Bare tokens from this pass (heatsink, klemmblech, spacer, ...) match filenames a
 text, so they are dropped. Writes mapping.json in place. Refuses to change an old key.
 """
 import json
+import os
 import re
+import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from deid.matcher import Replacer
 from deid.paths import rename_rel
 
