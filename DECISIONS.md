@@ -13,6 +13,14 @@ Scores live in SCORES.md; link the attempt number here when a decision is tested
 - **Result:** attempt #N, score X → Y, or "reverted"
 -->
 
+## PDF page-text identities are emails, uncommon name pairs, and suffixed companies
+- **Context:** Attempt 3 scored 306, identical to attempt 2. Title-block names were actually gone from the output (pymupdf, pdftotext and raw bytes), so they are not the scored PDF identities. A scan of the 10,249 PDFs showed the same unmapped people and emails repeated across hundreds of files, which is what the cross-PDF consistency checks need.
+- **Options:** A) OCR burned-in text. B) Add every capitalized pair. C) Add emails, name pairs where neither word is a dictionary word, and company phrases that end in Inc/GmbH/Ltd/… as a whole phrase only.
+- **Chose:** C. Dictionary-word pairs ("stainless steel", "geometric tolerance") stay untouched, and company tokens are not added as bare keys.
+- **Pros:** Targets identities that recur across PDFs without rewriting engineering vocabulary.
+- **Cons / risks:** A real surname that is also a dictionary word is still missed. A rare two-word product name can become a key.
+- **Result:** attempt 4, pending
+
 ## Private state on the root disk; no ext4 reserve on the volume
 - **Context:** The first full download filled the 100 GB volume; writes (scp, mapping, state) failed
 - **Options:** A) Keep `PRIVATE` on the volume. B) `DEID_PRIVATE=/root/private` (47 GB free on root) and `tune2fs -m 0` on the data volume
