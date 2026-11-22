@@ -13,12 +13,20 @@ Scores live in SCORES.md; link the attempt number here when a decision is tested
 - **Result:** attempt #N, score X → Y, or "reverted"
 -->
 
+## Private state on the root disk; no ext4 reserve on the volume
+- **Context:** The first full download filled the 100 GB volume; writes (scp, mapping, state) failed
+- **Options:** A) Keep `PRIVATE` on the volume. B) `DEID_PRIVATE=/root/private` (47 GB free on root) and `tune2fs -m 0` on the data volume
+- **Chose:** B
+- **Pros:** Mapping/state writes never compete with input/corpus space; +5 GB usable on the volume
+- **Cons / risks:** `DEID_PRIVATE` must be exported in every shell (added to `/root/.bashrc`)
+- **Result:** —
+
 ## Slice runner because the volume is capped at 100 GB
 - **Context:** Storage limit increase denied; 140 GB input (126 GB unique) cannot fit
 - **Options:** A) Wait for a limit increase. B) `deid.batch`: ~12 GB slices of whole repos; download → harvest/transform → upload → evict, earliest slices kept resident
 - **Chose:** B
 - **Pros:** Fits any disk; resumable; same handlers and mapping as the single-pass run
-- **Cons / risks:** Each pass re-downloads what was evicted; upload.py must tolerate partial local folders (to verify); token expiry prompts pause the run
+- **Cons / risks:** Each pass re-downloads what was evicted; token expiry pauses the run (verified: upload.py only adds/skips, never deletes remote files, so per-slice partial uploads are safe; README sent with the final call)
 - **Result:** —
 
 ## Small droplet (2 vCPU / 2 GB) + volume, not a big VM
