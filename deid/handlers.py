@@ -102,16 +102,45 @@ def h_ole(data, name, R, depth, log):
     ole = olefile.OleFileIO(fp, write_mode=True)
     Ra = getattr(R, "ole_all", R)
     Rp = getattr(R, "ole_prop", Ra)
+    umap = getattr(R, "unicode_map", {})
     changed = False
     expected = {}
-    for path in ole.listdir(streams=True, storages=False):
+    local_pairs = {}  # orig_bytes (ascii/utf8) -> pseudo_bytes replaced in THIS file's propsets
+    streams = ole.listdir(streams=True, storages=False)
+    is_prop = lambda p: p[-1].startswith("\x05") or p[-1] == "ISolidWorksInformation"
+    # Pass 1: property-set streams first so we know this file's exact saved-account / author pairs
+    prop_paths = [p for p in streams if is_prop(p)]
+    other_paths = [p for p in streams if not is_prop(p)]
+    for path in prop_paths:
         raw = ole.openstream(path).read()
-        nb = _propset(raw, Rp) if path[-1].startswith("\x05") else Ra.replace_binary(raw)
+        nb = _propset(raw, Rp, umap, local_pairs)
         expected["/".join(path)] = nb
         if nb is not raw:
             ole.write_stream(path, nb)
             changed = True
+    # Pass 2: all other streams — global ole_all + per-file saved-account sweep (skip Preview streams)
+    for path in other_paths:
+        raw = ole.openstream(path).read()
+        pname = "/".join(path)
+        if "preview" in pname.lower():
+            expected[pname] = raw
+            continue
+        nb = Ra.replace_binary(raw)
+        if local_pairs:
+            nb2 = _sweep_ole_stream(nb, local_pairs, Rp)
+            if nb2 is not nb:
+                nb = nb2
+        expected[pname] = nb
+        if nb is not raw:
+            ole.write_stream(path, nb)
+            changed = True
     stale = Ra.replace_binary(data) is not data  # identifiers left in free/slack sectors
+    if not stale and local_pairs:
+        low_data = data.lower()
+        for ob in local_pairs:
+            if len(ob) >= 3 and ob.lower() in low_data:
+                stale = True
+                break
     if not changed and not stale:
         return None
     buf = bytearray(fp.getvalue())
@@ -128,9 +157,63 @@ def h_ole(data, name, R, depth, log):
     return new
 
 
-def _propset(raw, R):
-    """Property-set stream: every VT_LPSTR / VT_LPWSTR value, however short, plus long runs."""
+def _sweep_ole_stream(raw, local_pairs, R):
+    """Replace this file's own saved-account/author values across its non-property streams."""
+    from .pseudo import apply_case
+    buf = None
+    for ob, pb in sorted(local_pairs.items(), key=lambda t: -len(t[0])):
+        if len(ob) < 3 or len(ob) != len(pb):
+            continue
+        # ASCII / UTF-8 exact byte-length occurrences (word-bounded when ASCII)
+        cur = bytes(buf) if buf is not None else raw
+        ob_low = ob.lower()
+        if ob_low in cur.lower():
+            pat = re.compile(re.escape(ob), re.I)
+            for m in pat.finditer(cur):
+                s, e = m.start(), m.end()
+                if ob.isascii() and not R._boundary(cur, s, e):
+                    continue
+                rep = apply_case(cur[s:e], pb.decode("ascii")) if (ob.isascii() and pb.isascii()) else pb
+                if len(rep) == e - s:
+                    buf = buf or bytearray(raw)
+                    buf[s:e] = rep
+        # UTF-16LE occurrences
+        if ob.isascii() and pb.isascii():
+            u_ob = ob.decode("ascii").encode("utf-16-le")
+            u_pb = pb.decode("ascii").encode("utf-16-le")
+        else:
+            try:
+                s_ob = ob.decode("utf-8")
+                s_pb = pb.decode("ascii")
+                if len(s_ob) != len(s_pb):
+                    continue
+                u_ob = s_ob.encode("utf-16-le")
+                u_pb = s_pb.encode("utf-16-le")
+            except Exception:
+                continue
+        cur = bytes(buf) if buf is not None else raw
+        if u_ob.lower() in cur.lower():
+            pat = re.compile(re.escape(u_ob), re.I)
+            for m in pat.finditer(cur):
+                s, e = m.start(), m.end()
+                if e - s == len(u_pb):
+                    if ob.isascii():
+                        # check UTF-16LE word boundaries
+                        if s >= 2 and cur[s - 1] == 0 and cur[s - 2] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789":
+                            continue
+                        if e + 2 <= len(cur) and cur[e + 1] == 0 and cur[e] in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789":
+                            continue
+                    rep_u = apply_case(cur[s:e:2], pb.decode("ascii")).decode("ascii").encode("utf-16-le") if (ob.isascii() and pb.isascii()) else u_pb
+                    if len(rep_u) == e - s:
+                        buf = buf or bytearray(raw)
+                        buf[s:e] = rep_u
+    return raw if buf is None else bytes(buf)
+
+
+def _propset(raw, R, umap=None, local_pairs=None):
+    """Property-set stream: every VT_LPSTR / VT_LPWSTR value (ASCII + non-ASCII), plus long runs."""
     buf = bytearray(R.replace_binary(raw))
+    umap = umap or {}
     for m in re.finditer(rb"[\x1e\x1f]\x00\x00\x00", raw):
         o, wide = m.end(), raw[m.start()] == 0x1F
         if o + 4 > len(raw):
@@ -143,18 +226,51 @@ def _propset(raw, R):
             if len(s) % 2:
                 continue
             v = s.decode("utf-16-le", "replace").split("\x00", 1)[0]
-            if not v or not all(0x20 <= ord(c) <= 0x7E for c in v):
+            if not v:
                 continue
-            nv = R.replace_bytes(v.encode("ascii"))
-            if nv != v.encode("ascii"):
-                buf[o + 4:o + 4 + 2 * len(v)] = nv.decode("ascii").encode("utf-16-le")
+            if all(0x20 <= ord(c) <= 0x7E for c in v):
+                vb = v.encode("ascii")
+                nv = R.replace_bytes(vb)
+                if nv is not vb and nv != vb:
+                    buf[o + 4:o + 4 + 2 * len(v)] = nv.decode("ascii").encode("utf-16-le")
+                    if local_pairs is not None and len(vb) >= 3:
+                        local_pairs[vb] = nv
+            else:
+                rep = umap.get(v.lower())
+                if rep and rep.isascii():
+                    # fit exact UTF-16LE character length of v
+                    rfit = (rep[:len(v)] if len(rep) >= len(v) else rep + "x" * (len(v) - len(rep)))
+                    if len(rfit) == len(v):
+                        buf[o + 4:o + 4 + 2 * len(v)] = rfit.encode("utf-16-le")
+                        if local_pairs is not None and len(v) >= 3:
+                            vb = v.encode("utf-8", "ignore")
+                            if len(vb) == len(rfit):
+                                local_pairs[vb] = rfit.encode("ascii")
         else:
             v = s.split(b"\x00", 1)[0]
-            if not v or any(c < 0x20 or c > 0x7E for c in v):
+            if not v:
                 continue
-            nv = R.replace_bytes(v)
-            if nv is not v:
-                buf[o + 4:o + 4 + len(v)] = nv
+            if all(0x20 <= c <= 0x7E for c in v):
+                nv = R.replace_bytes(v)
+                if nv is not v and nv != v:
+                    buf[o + 4:o + 4 + len(v)] = nv
+                    if local_pairs is not None and len(v) >= 3:
+                        local_pairs[v] = nv
+            else:
+                try:
+                    vs = v.decode("utf-8")
+                except UnicodeDecodeError:
+                    try:
+                        vs = v.decode("latin-1")
+                    except Exception:
+                        continue
+                rep = umap.get(vs.lower())
+                if rep and rep.isascii():
+                    rfit = (rep[:len(v)] if len(rep) >= len(v) else rep + "x" * (len(v) - len(rep))).encode("ascii")
+                    if len(rfit) == len(v):
+                        buf[o + 4:o + 4 + len(v)] = rfit
+                        if local_pairs is not None and len(v) >= 3:
+                            local_pairs[v] = rfit
     out = bytes(buf)
     return raw if out == raw else out
 
@@ -349,18 +465,30 @@ def h_pdf(data, name, R, depth, log):
     import pikepdf
     pdf = pikepdf.open(io.BytesIO(data))
     npages = len(pdf.pages)
+    Rpt = getattr(R, "pdf_text", R)
+    Rpm = getattr(R, "pdf_meta", Rpt)
     changed = [False]
 
-    def fix_str(v):
+    def fix_str(v, meta_field=False):
+        Rx = Rpm if meta_field else Rpt
         try:
             raw = bytes(v)
         except Exception:
             return None
         if raw.startswith(b"\xfe\xff"):
             s = raw[2:].decode("utf-16-be", "ignore")
-            ns = R.replace_str(s)
+            ns = Rx.replace_str(R.replace_unicode_str(s))
             return pikepdf.String(ns) if ns != s else None
-        nb = R.replace_bytes(raw)
+        # Handle UTF-8 or Latin-1 non-ASCII PDF strings (e.g. Author = 'Jesús', 'Séba')
+        if not raw.isascii():
+            try:
+                s = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                s = raw.decode("latin-1")
+            ns = Rx.replace_str(R.replace_unicode_str(s))
+            if ns != s:
+                return pikepdf.String(ns)
+        nb = Rx.replace_bytes(raw)
         return pikepdf.String(nb) if nb is not raw else None
 
     def walk(obj, d=0):
@@ -371,8 +499,9 @@ def h_pdf(data, name, R, depth, log):
                 if k in ("/Parent", "/P", "/Kids", "/Contents", "/Font", "/Resources"):
                     continue
                 v = obj.get(k)
+                mf = k in ("/Author", "/Creator", "/Subject", "/Keywords")
                 if isinstance(v, pikepdf.String):
-                    nv = fix_str(v)
+                    nv = fix_str(v, meta_field=mf)
                     if nv is not None:
                         obj[k] = nv
                         changed[0] = True
@@ -394,8 +523,14 @@ def h_pdf(data, name, R, depth, log):
             t = obj.get("/Type")
             if t == "/Metadata":
                 raw = obj.read_bytes()
-                nb = R.replace_text(raw)
-                if nb is not raw:
+                try:
+                    s = raw.decode("utf-8")
+                    s2 = R.replace_unicode_str(s)
+                    b2 = s2.encode("utf-8") if s2 != s else raw
+                except UnicodeDecodeError:
+                    b2 = raw
+                nb = Rpm.replace_text(b2)
+                if nb != raw:
                     obj.write(nb)
                     changed[0] = True
             elif t == "/EmbeddedFile":
@@ -423,43 +558,85 @@ def h_pdf(data, name, R, depth, log):
 
 
 def _pdf_page_text(data, R):
-    """Visible page text: redact each identifier and write its pseudonym in the same box."""
+    """Visible page text: redact each identifier (ASCII + non-ASCII) and write its pseudonym
+    at the exact oriented bounding box (handling horizontal, rotated, and vertical text)."""
     import pymupdf
     from .pseudo import apply_case
+    Rpt = getattr(R, "pdf_text", R)
     doc = pymupdf.open(stream=data, filetype="pdf")
     if doc.needs_pass:
         return None
     changed = False
     for page in doc:
-        b = page.get_text().encode("utf-8", "surrogateescape")
-        hs = R.hits(b)
-        if not hs:
+        text = page.get_text()
+        if not text:
+            continue
+        b = text.encode("utf-8", "surrogateescape")
+        hs = Rpt.hits(b)
+        uhs = R.unicode_hits(text)
+        if not hs and not uhs:
             continue
         reps = {}
+        for orig, rep in uhs:
+            reps[orig] = rep
         for s, e, p in hs:
             try:
-                reps[b[s:e].decode("utf-8")] = apply_case(b[s:e], p).decode("ascii")
+                orig = b[s:e].decode("utf-8")
+                if orig not in reps:
+                    reps[orig] = apply_case(b[s:e], p).decode("ascii")
             except (UnicodeDecodeError, UnicodeEncodeError):
                 continue
         writes = []
+        claimed = []
         for orig, rep in sorted(reps.items(), key=lambda t: -len(t[0])):
-            whole = re.compile(r"(?<![A-Za-z0-9])" + re.escape(orig) + r"(?![A-Za-z0-9])", re.I)
-            for r in page.search_for(orig):
-                h, w = r.height, r.width / max(1, len(orig))
-                ctx = page.get_textbox(pymupdf.Rect(r.x0 - 1.5 * w, r.y0 - 0.1 * h, r.x1 + 1.5 * w, r.y1 + 0.1 * h))
-                if not whole.search(ctx.replace("\n", " ")):
-                    continue  # match inside a longer word
-                # a thin box through the middle of the line: neighbours above/below survive
-                core = pymupdf.Rect(r.x0 + 0.15 * w, r.y0 + 0.35 * h, r.x1 - 0.15 * w, r.y1 - 0.35 * h)
+            is_asc = orig.isascii()
+            for q in page.search_for(orig, quads=True):
+                r = q.rect
+                if r.is_empty or r.width <= 0 or r.height <= 0:
+                    continue
+                # Skip if already covered by a longer match
+                if any((r & c).get_area() > 0.5 * r.get_area() for c in claimed):
+                    continue
+                dx, dy = q.ur.x - q.ul.x, q.ur.y - q.ul.y
+                horiz = abs(dx) >= abs(dy)
+                if is_asc:
+                    if horiz:
+                        cw = r.width / max(1, len(orig))
+                        ctx_r = pymupdf.Rect(r.x0 - 1.5 * cw, r.y0 - 0.1 * r.height,
+                                             r.x1 + 1.5 * cw, r.y1 + 0.1 * r.height)
+                    else:
+                        ch = r.height / max(1, len(orig))
+                        ctx_r = pymupdf.Rect(r.x0 - 0.1 * r.width, r.y0 - 1.5 * ch,
+                                             r.x1 + 0.1 * r.width, r.y1 + 1.5 * ch)
+                    ctx = page.get_textbox(ctx_r).replace("\n", " ").encode("utf-8", "ignore")
+                    ob = orig.encode("utf-8", "ignore")
+                    ok = False
+                    for m in re.finditer(re.escape(ob), ctx, re.I):
+                        if Rpt._boundary(ctx, m.start(), m.end()):
+                            ok = True
+                            break
+                    if not ok:
+                        continue  # match inside a longer non-boundary word
+                if horiz:
+                    core = pymupdf.Rect(r.x0 + 0.01 * r.width, r.y0 + 0.15 * r.height,
+                                        r.x1 - 0.01 * r.width, r.y1 - 0.15 * r.height)
+                    fs = max(2.0, min(r.height * 0.72, r.width / max(1, len(rep)) / 0.54))
+                    ang = 0 if dx >= 0 else 180
+                    pt = pymupdf.Point(r.x0, r.y1 - 0.22 * r.height) if ang == 0 else pymupdf.Point(r.x1, r.y0 + 0.22 * r.height)
+                else:
+                    core = pymupdf.Rect(r.x0 + 0.15 * r.width, r.y0 + 0.01 * r.height,
+                                        r.x1 - 0.15 * r.width, r.y1 - 0.01 * r.height)
+                    fs = max(2.0, min(r.width * 0.72, r.height / max(1, len(rep)) / 0.54))
+                    ang = 90 if dy < 0 else 270
+                    pt = pymupdf.Point(r.x1 - 0.22 * r.width, r.y1) if ang == 90 else pymupdf.Point(r.x0 + 0.22 * r.width, r.y0)
                 page.add_redact_annot(core, fill=False, cross_out=False)
-                fs = max(2.0, min(h * 0.75, r.width / max(1, len(rep)) / 0.52))
-                writes.append((pymupdf.Point(r.x0, r.y1 - 0.22 * h), rep, fs))
+                writes.append((pt, rep, fs, ang))
+                claimed.append(r)
         if writes:
             page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
                                   graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
-            for pt, rep, fs in writes:
-                page.insert_text(pt, rep, fontsize=fs, fontname="helv",
-                                 rotate=page.rotation and (360 - page.rotation) % 360)
+            for pt, rep, fs, ang in writes:
+                page.insert_text(pt, rep, fontsize=fs, fontname="helv", rotate=ang)
             changed = True
     if not changed:
         return None

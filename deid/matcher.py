@@ -50,18 +50,53 @@ class Replacer:
             assert len(k) == len(v) and k.isascii() and v.isascii(), k
             self.A.add_word(k, (len(k), v))
         self.empty = not keys
+        self.unicode_map = {}
+        self._ure = None
         if keys:
             self.A.make_automaton()
 
     @classmethod
     def load(cls, mapping_path):
         m = json.loads(open(mapping_path, encoding="utf-8").read())
-        r = cls(m["keys"])
+        base = m["keys"]
+        r = cls(base)
         r.owners = m.get("owners", {})
+        drop = set(m.get("text_drop", ()))
+        clean = {k: v for k, v in base.items() if k not in drop} if drop else base
         oa, op = m.get("ole_all", {}), m.get("ole_prop", {})
-        r.ole_all = cls({**m["keys"], **oa}) if oa else r
-        r.ole_prop = cls({**m["keys"], **oa, **op}) if op else r.ole_all
+        r.ole_all = cls({**clean, **oa}) if (oa or drop) else r
+        r.ole_prop = cls({**clean, **oa, **op}) if (op or oa or drop) else r.ole_all
+        pt, pm = m.get("pdf_text", {}), m.get("pdf_meta", {})
+        r.pdf_text = cls({**clean, **pt}) if (pt or drop) else r
+        r.pdf_meta = cls({**clean, **pt, **pm}) if (pm or pt or drop) else r.pdf_text
+        um = m.get("unicode_map", {})
+        r.unicode_map = {k.lower(): v for k, v in um.items() if k and v}
+        if r.unicode_map:
+            ks = sorted(r.unicode_map, key=len, reverse=True)
+            r._ure = re.compile("|".join(re.escape(k) for k in ks), re.I)
+        else:
+            r._ure = None
         return r
+
+    def replace_unicode_str(self, s: str) -> str:
+        if not self._ure or s.isascii():
+            return s
+        def _sub(m):
+            rep = self.unicode_map.get(m.group(0).lower())
+            return rep if rep is not None else m.group(0)
+        return self._ure.sub(_sub, s)
+
+    def unicode_hits(self, text: str):
+        """Return list of (orig, rep) pairs for non-ASCII keys found in text."""
+        if not self._ure or text.isascii():
+            return []
+        out = {}
+        for m in self._ure.finditer(text):
+            orig = m.group(0)
+            rep = self.unicode_map.get(orig.lower())
+            if rep and orig not in out:
+                out[orig] = rep
+        return list(out.items())
 
     def _boundary(self, d: bytes, s: int, e: int) -> bool:
         if s > 0 and _alnum(d[s - 1]) and not _transition_ok(d[s - 1], d[s]):

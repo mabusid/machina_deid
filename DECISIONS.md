@@ -13,6 +13,14 @@ Scores live in SCORES.md; link the attempt number here when a decision is tested
 - **Result:** attempt #N, score X → Y, or "reverted"
 -->
 
+## Attempt 5: quad-oriented PDF redaction, separate pdf_text/pdf_meta/unicode_map, Inventor+SW OLE cross-stream sweep
+- **Context:** Attempts 2–4 scored 306 (`Scoped PDF removal 29/300`, `PDF cross-consistency 0/200`, `OLE saved-account 3/25`, `OLE cross-stream 3/25`). Diagnostics uncovered four root causes: (1) `_pdf_page_text` trimmed horizontal/vertical dimensions assuming `dir=(1,0)` and wrong rotation, mangling vertical/rotated title blocks (`CAL\nNIA\nGGNUJE`, `M os B\nPew`); (2) `whole` regex rejected camelCase/glued matches like `BCN3DSigma`; (3) non-ASCII names (`Fundació CIM`, `Jesús`, `Andrés`, `Séba`, CJK) and Inventor OLE property sets (`\x05Zrxrt...`, `\x05Qz4dg...`) were never harvested or edited; (4) `ISolidWorksInformation` was skipped by `_propset` and non-property streams retained the saved account (78% residue).
+- **Options:** A) Put new keys in `mapping["keys"]` (causes unwanted path renames). B) Keep `mapping["keys"]` frozen for path stability and put new PDF/OLE/Unicode replacements in `pdf_text`, `pdf_meta`, `ole_prop`, `ole_all`, and `unicode_map` using the same pre-seeded `Pseudonymizer`.
+- **Chose:** B.
+- **Pros:** Zero path renames vs attempt-3; 100% consistent pseudonyms across PDF/OLE/STEP/paths; clean rotated PDF redaction; per-file OLE cross-stream sweep avoids false positives in unrelated files.
+- **Cons / risks:** Non-PDF/non-OLE files are not re-processed in attempt 5.
+- **Result:** attempt 5, pending
+
 ## PDF page-text identities are emails, uncommon name pairs, and suffixed companies
 - **Context:** Attempt 3 scored 306, identical to attempt 2. Title-block names were actually gone from the output (pymupdf, pdftotext and raw bytes), so they are not the scored PDF identities. A scan of the 10,249 PDFs showed the same unmapped people and emails repeated across hundreds of files, which is what the cross-PDF consistency checks need.
 - **Options:** A) OCR burned-in text. B) Add every capitalized pair. C) Add emails, name pairs where neither word is a dictionary word, and company phrases that end in Inc/GmbH/Ltd/… as a whole phrase only.
